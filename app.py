@@ -931,12 +931,12 @@ def run_app():
     # Tab 4: GitHub & Setup
     with tab4:
         st.header("GitHub Repository")
-        st.markdown("[View Project on GitHub](https://github.com/yourusername/technical-doc-assistant)")
+        st.markdown("[View Project on GitHub](https://github.com/GopalAnil/Technical_doc_ai)")
         
         st.subheader("Installation Instructions")
         st.code("""
         # Clone the repository
-        git clone https://github.com/yourusername/technical-doc-assistant.git
+        git clone https://github.com/GopalAnil/Technical_doc_ai.git
         cd technical-doc-assistant
         
         # Create and activate virtual environment
