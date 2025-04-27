@@ -3,31 +3,11 @@ import pandas as pd
 import logging
 import os
 import sys
+import torch
 import time
 import re
 from typing import Dict, List, Optional, Any
-
-# Set up logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-logger = logging.getLogger(__name__)
-
-# Check for PyTorch availability
-try:
-    import torch
-    TORCH_AVAILABLE = True
-    logger.info("PyTorch is available. Models can be loaded if present.")
-except ImportError:
-    TORCH_AVAILABLE = False
-    logger.warning("PyTorch not available. Running in fallback mode only.")
-
-# Try to import transformers conditionally
-try:
-    from transformers import T5ForConditionalGeneration, AutoTokenizer, AutoModelForSequenceClassification
-    TRANSFORMERS_AVAILABLE = True
-    logger.info("Transformers library is available.")
-except ImportError:
-    TRANSFORMERS_AVAILABLE = False
-    logger.warning("Transformers library not available. Running in fallback mode only.")
+from transformers import T5ForConditionalGeneration, AutoTokenizer, AutoModelForSequenceClassification
 
 # Add the project root to the path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -41,89 +21,12 @@ except ImportError:
         sys.path.append(os.path.abspath('.'))
         from prompt_engineering.prompt_templates import TechnicalDocPrompts
     except ImportError:
-        st.error("Failed to import TechnicalDocPrompts. Using built-in template system.")
-        # Define a simplified version of TechnicalDocPrompts that can be used as a fallback
-        class TechnicalDocPrompts:
-            """Fallback implementation of prompt templates"""
-            
-            def __init__(self):
-                self.templates = {
-                    "concept_explanation": """# {concept}
+        st.error("Failed to import TechnicalDocPrompts. Please check your project structure.")
+        TechnicalDocPrompts = None
 
-## Definition
-- Provide a clear definition and explanation.
-
-## Key Components or Aspects
-- Break down the main components or aspects of {concept}.
-
-## How It Works
-- Explain the underlying mechanism or process.
-- Include technical details appropriate for {expertise_level} level.
-
-## Practical Applications
-- Describe {num_use_cases} practical applications or scenarios.
-""",
-                    "api_reference": """# API Reference: {code_type}
-
-## Description
-Comprehensive documentation for this {language} {code_type}.
-
-## Parameters
-List and describe all parameters.
-
-## Return Value
-What this {code_type} returns.
-
-## Examples
-{num_examples} example(s) of how to use this {code_type}.
-""",
-                    "tutorial": """# {topic} Tutorial
-
-## Introduction
-Introduction to {topic} for {audience}.
-
-## Prerequisites
-What you need to know before starting.
-
-## Step-by-Step Guide
-{num_steps} steps to accomplish the task.
-
-## Common Challenges
-{num_challenges} common issues and solutions.
-
-## Next Steps
-Where to go from here.
-""",
-                    "troubleshooting": """# Troubleshooting {issue} in {technology}
-
-## Symptoms
-How to identify this problem.
-
-## Potential Causes
-{num_causes} possible reasons for this issue.
-
-## Diagnostic Steps
-How to determine the exact cause.
-
-## Solutions
-{num_solutions} ways to resolve this issue.
-
-## Prevention
-How to avoid this issue in the future.
-"""
-                }
-            
-            def get_prompt(self, doc_type, **kwargs):
-                """Get prompt template for specific document type with parameter substitution"""
-                if doc_type not in self.templates:
-                    return "# Generic Documentation\n\nPlease provide content for this document."
-                
-                template = self.templates[doc_type]
-                return template.format(**kwargs)
-            
-            def list_available_prompts(self):
-                """List available prompt types"""
-                return list(self.templates.keys())
+# Set up logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
 # Initialize session state
 def init_session_state():
@@ -137,10 +40,6 @@ def init_session_state():
         st.session_state.last_generated_doc = ""
     if 'current_model' not in st.session_state:
         st.session_state.current_model = ""
-    if 'is_fallback_mode' not in st.session_state:
-        st.session_state.is_fallback_mode = not (TORCH_AVAILABLE and TRANSFORMERS_AVAILABLE)
-    if 'fallback_message_shown' not in st.session_state:
-        st.session_state.fallback_message_shown = False
 
 class TechnicalDocAssistant:
     """Technical Documentation Assistant application"""
@@ -149,35 +48,22 @@ class TechnicalDocAssistant:
         self.classification_model_path = classification_model_path
         self.generation_model_path = generation_model_path
         
-        # Initialize prompt templates
         if TechnicalDocPrompts is not None:
             self.prompts = TechnicalDocPrompts()
         else:
             st.error("TechnicalDocPrompts could not be imported.")
             return
         
-        # Check if we can load models
-        if st.session_state.is_fallback_mode:
-            logger.info("Running in fallback mode. Models will not be loaded.")
-            st.session_state.model_loaded = False
-            st.session_state.generation_model_loaded = False
-            st.session_state.current_model = "Fallback Mode (No ML models)"
-            self.classification_model_loaded = False
-            self.generation_model_loaded = False
-        else:
-            # Try to load models
-            self.classification_model_loaded = self.load_classification_model()
-            st.session_state.model_loaded = self.classification_model_loaded
-            
-            self.generation_model_loaded = self.load_generation_model()
-            st.session_state.generation_model_loaded = self.generation_model_loaded
+        # Load the classification model if available
+        self.classification_model_loaded = self.load_classification_model()
+        st.session_state.model_loaded = self.classification_model_loaded
+        
+        # Load the generation model
+        self.generation_model_loaded = self.load_generation_model()
+        st.session_state.generation_model_loaded = self.generation_model_loaded
     
     def load_classification_model(self):
         """Load the fine-tuned classification model if available"""
-        if not TRANSFORMERS_AVAILABLE or not TORCH_AVAILABLE:
-            logger.warning("Cannot load classification model: PyTorch or Transformers not available")
-            return False
-            
         try:
             if os.path.exists(self.classification_model_path):
                 logger.info(f"Loading classification model from {self.classification_model_path}")
@@ -200,10 +86,6 @@ class TechnicalDocAssistant:
     
     def load_generation_model(self):
         """Load the T5 model for text generation"""
-        if not TRANSFORMERS_AVAILABLE or not TORCH_AVAILABLE:
-            logger.warning("Cannot load generation model: PyTorch or Transformers not available")
-            return False
-            
         try:
             logger.info(f"Loading generation model from {self.generation_model_path}")
             
@@ -561,8 +443,8 @@ result = function_name(param1, param2)
     
     def _fill_template_with_content(self, doc_type, template, **kwargs):
         """Fill the template with generated content based on the document type"""
-        if not self.generation_model_loaded and not st.session_state.is_fallback_mode:
-            return "Model is not ready. Using fallback content."
+        if not self.generation_model_loaded:
+            return "Model is not ready. Cannot generate content."
         
         try:
             # Extract key information based on document type
@@ -601,34 +483,26 @@ Your use cases:"""
                 with st.spinner("Generating concept definition..."):
                     if cs_content and "definition" in cs_content:
                         definition = cs_content["definition"]
-                    elif self.generation_model_loaded:
-                        definition = self.generate_content(definition_prompt, max_length=200)
                     else:
-                        definition = f"{concept.capitalize()} is a fundamental concept in computing that enables developers to solve specific problems efficiently. It provides a structured approach to handling data and operations in a way that promotes clarity and maintainability."
+                        definition = self.generate_content(definition_prompt, max_length=200)
                 
                 with st.spinner("Generating key components..."):
                     if cs_content and "components" in cs_content:
                         components = cs_content["components"]
-                    elif self.generation_model_loaded:
-                        components = self.generate_content(components_prompt, max_length=250)
                     else:
-                        components = f"1. Core Structure: The fundamental organization of {concept}\n2. Operation Patterns: How {concept} processes information\n3. Integration Methods: Ways to incorporate {concept} into larger systems\n4. Performance Characteristics: Efficiency and effectiveness factors\n5. Application Contexts: Where and when {concept} is most useful"
+                        components = self.generate_content(components_prompt, max_length=250)
                 
                 with st.spinner("Generating mechanism explanation..."):
                     if cs_content and "mechanism" in cs_content:
                         mechanism = cs_content["mechanism"]
-                    elif self.generation_model_loaded:
-                        mechanism = self.generate_content(mechanism_prompt, max_length=300)
                     else:
-                        mechanism = f"{concept.capitalize()} works by systematically organizing information and operations into logical units, enabling efficient processing and clear structure. It follows established patterns that have been refined through practical application across various domains. The effectiveness of {concept} relies on proper implementation according to established best practices."
+                        mechanism = self.generate_content(mechanism_prompt, max_length=300)
                 
                 with st.spinner("Generating use cases..."):
                     if cs_content and "use_cases" in cs_content:
                         use_cases = cs_content["use_cases"]
-                    elif self.generation_model_loaded:
-                        use_cases = self.generate_content(use_cases_prompt, max_length=250)
                     else:
-                        use_cases = f"1. Software Development: Using {concept} to create maintainable code\n2. System Architecture: Implementing {concept} to design scalable systems\n3. Data Management: Applying {concept} principles to organize and process information effectively"
+                        use_cases = self.generate_content(use_cases_prompt, max_length=250)
                 
                 # Format components with improved formatting
                 components_items = self._format_list_content(components)
@@ -691,44 +565,7 @@ Format the documentation in Markdown style with proper headings and code blocks.
                 
                 # Generate the content with the enhanced template
                 with st.spinner("Generating API documentation..."):
-                    if self.generation_model_loaded:
-                        return self.generate_content(api_template, max_length=700)
-                    else:
-                        # Fallback API documentation
-                        return f"""# {code_type.capitalize()} Documentation
-
-## Description
-This {language} {code_type} performs operations based on the provided parameters.
-
-## Parameters
-- `param1` (type): Description of the first parameter
-- `param2` (type): Description of the second parameter
-
-## Return Value
-- Return Type: The type of value this {code_type} returns
-- Description: Explanation of the returned value
-
-## Exceptions
-- `Error1`: Conditions when this exception might be raised
-- `Error2`: Other error conditions
-
-## Examples
-
-```{language}
-# Example 1: Basic usage
-result = function_name(param1, param2)
-print(result)
-
-# Example 2: Advanced usage
-result = function_name(param1, param2, optional_param=value)
-```
-
-## Notes
-- Additional information about using this {code_type}
-- Best practices and considerations
-
-Please replace this generic documentation with actual details based on the code provided.
-"""
+                    return self.generate_content(api_template, max_length=700)
                 
             # For tutorials - UPDATED WITH BETTER TEMPLATE  
             elif doc_type == "tutorial":
@@ -754,41 +591,7 @@ Format the tutorial in Markdown with proper headings, code blocks, and bullet po
                 
                 # Generate the content with the enhanced template
                 with st.spinner("Generating tutorial..."):
-                    if self.generation_model_loaded:
-                        return self.generate_content(tutorial_template, max_length=700)
-                    else:
-                        # Fallback tutorial
-                        steps = "\n".join([f"## Step {i+1}: [Step Description]\nExplanation and code example for step {i+1}.\n\n```\n# Code example\n```" for i in range(num_steps)])
-                        challenges = "\n".join([f"### Challenge {i+1}: [Common Issue]\nSolution to challenge {i+1}." for i in range(num_challenges)])
-                        
-                        return f"""# {topic} Tutorial for {audience}
-
-## Introduction
-This tutorial introduces {topic} and explains why it's useful for {audience}.
-
-## Prerequisites
-Before starting this tutorial, you should have:
-- Prerequisite 1
-- Prerequisite 2
-- Prerequisite 3
-
-## Setup
-Instructions for setting up your environment.
-
-{steps}
-
-## Common Challenges and Solutions
-{challenges}
-
-## Next Steps
-To continue learning about {topic}, consider exploring:
-- Advanced topic 1
-- Related technology 2
-- Project idea 3
-
-## Conclusion
-In this tutorial, you learned about {topic} and how to implement it. You now have the skills to apply this knowledge in your own projects.
-"""
+                    return self.generate_content(tutorial_template, max_length=700)
                 
             # For troubleshooting - UPDATED WITH BETTER TEMPLATE
             elif doc_type == "troubleshooting":
@@ -813,38 +616,7 @@ Format the guide in Markdown with proper headings, code blocks, and bullet point
                 
                 # Generate the content with the enhanced template
                 with st.spinner("Generating troubleshooting guide..."):
-                    if self.generation_model_loaded:
-                        return self.generate_content(troubleshooting_template, max_length=700)
-                    else:
-                        # Fallback troubleshooting guide
-                        causes = "\n".join([f"### Cause {i+1}: [Potential Cause]\nHow to diagnose if this is your issue." for i in range(num_causes)])
-                        solutions = "\n".join([f"### Solution {i+1}: [Solution Name]\nStep-by-step instructions to implement this solution.\n\n```\n# Example command or code if applicable\n```" for i in range(num_solutions)])
-                        
-                        return f"""# Troubleshooting {issue} in {technology}
-
-## Symptoms
-How to identify this problem:
-- Symptom 1
-- Symptom 2
-- Symptom 3
-
-## Potential Causes and Diagnosis
-{causes}
-
-## Solutions
-{solutions}
-
-## Prevention
-To prevent this issue in the future:
-- Preventative measure 1
-- Preventative measure 2
-- Preventative measure 3
-
-## Additional Resources
-- Link to relevant documentation
-- Community forums
-- Support channels
-"""
+                    return self.generate_content(troubleshooting_template, max_length=700)
             
             # Default case
             return template
@@ -879,11 +651,6 @@ def run_app():
     
     st.title("Generate comprehensive technical documentation with AI")
     
-    # Show fallback mode banner if active
-    if st.session_state.is_fallback_mode and not st.session_state.fallback_message_shown:
-        st.info("⚠️ Running in fallback mode: Using pre-defined content instead of ML models. Documentation will still be generated but with less customization.")
-        st.session_state.fallback_message_shown = True
-    
     # Create tabs for the application
     tab1, tab2, tab3, tab4 = st.tabs([
         "Documentation Generator", 
@@ -894,7 +661,7 @@ def run_app():
     
     # Initialize the assistant if not already done
     if 'assistant' not in st.session_state:
-        with st.spinner("Initializing documentation assistant..."):
+        with st.spinner("Loading models... This may take a few minutes on first run"):
             st.session_state.assistant = TechnicalDocAssistant()
     
     assistant = st.session_state.assistant
@@ -904,24 +671,21 @@ def run_app():
         # Show model status
         model_status_expander = st.expander("Model Status", expanded=False)
         with model_status_expander:
-            st.write(f"Running in fallback mode: {st.session_state.is_fallback_mode}")
             st.write(f"Classification model loaded: {st.session_state.model_loaded}")
             st.write(f"Generation model loaded: {st.session_state.generation_model_loaded}")
             st.write(f"Current model: {st.session_state.current_model}")
             
             if st.button("Test Model"):
-                with st.spinner("Testing documentation generation..."):
-                    test_result = assistant.generate_content("Briefly define what a function is in programming.") if not st.session_state.is_fallback_mode else assistant._get_fallback_content("Briefly define what a function is in programming.")
+                with st.spinner("Testing model with simple prompt..."):
+                    test_result = assistant.generate_content("Briefly define what a function is in programming.")
                     st.write("Test generation result:")
                     st.write(test_result)
         
-        # Auto-classify checkbox (disabled in fallback mode)
-        auto_classify = st.checkbox("Auto-classify document type", value=False, disabled=st.session_state.is_fallback_mode)
-        if st.session_state.is_fallback_mode and auto_classify:
-            st.info("Auto-classification requires the classification model to be loaded.")
+        # Auto-classify checkbox
+        auto_classify = st.checkbox("Auto-classify document type", value=False)
         
         # Document type selection logic
-        if auto_classify and not st.session_state.is_fallback_mode:
+        if auto_classify:
             input_text = st.text_area("Enter text to classify document type", height=150)
             if st.button("Classify") and input_text:
                 with st.spinner("Classifying document type..."):
@@ -1004,10 +768,11 @@ def run_app():
                 }
             
             # Generate button
-            generate_button = st.button("Generate Documentation")
+            generate_disabled = not st.session_state.generation_model_loaded
+            generate_button = st.button("Generate Documentation", disabled=generate_disabled)
             
-            if st.session_state.is_fallback_mode:
-                st.info("Running in fallback mode with pre-defined content. Results will be less customized.")
+            if generate_disabled:
+                st.warning("Text generation model is not loaded. Please check logs for details.")
             
             if generate_button:
                 # Check for empty inputs
@@ -1166,12 +931,12 @@ def run_app():
     # Tab 4: GitHub & Setup
     with tab4:
         st.header("GitHub Repository")
-        st.markdown("[View Project on GitHub](https://github.com/yourusername/technical-doc-assistant)")
+        st.markdown("[View Project on GitHub](https://github.com/GopalAnil/Technical_doc_ai)")
         
         st.subheader("Installation Instructions")
         st.code("""
         # Clone the repository
-        git clone https://github.com/yourusername/technical-doc-assistant.git
+        git clone https://github.com/GopalAnil/Technical_doc_ai
         cd technical-doc-assistant
         
         # Create and activate virtual environment
